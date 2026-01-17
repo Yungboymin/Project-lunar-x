@@ -20,12 +20,12 @@ final_sessions = db["sessions"]
 
 class PhoneRequest(BaseModel):
     phone: str
-    user_id: str
+    user_id: str | None = "unknown"
 
 class VerifyRequest(BaseModel):
-    user_id: str
+    user_id: str | None = "unknown"
     code: str
-    password: str = None
+    password: str | None = None
 
 @app.post("/send_code")
 async def send_code(req: PhoneRequest):
@@ -33,18 +33,12 @@ async def send_code(req: PhoneRequest):
     await client.connect()
     try:
         sent_code = await client.send_code_request(req.phone)
-        # Store the hash so the /verify route can use it
         await temp_auth.update_one(
             {"user_id": req.user_id},
-            {"$set": {
-                "phone": req.phone, 
-                "phone_code_hash": sent_code.phone_code_hash
-            }},
+            {"$set": {"phone": req.phone, "phone_code_hash": sent_code.phone_code_hash}},
             upsert=True
         )
         return {"status": "success"}
-    except errors.FloodWaitError as e:
-        return {"status": "error", "message": f"Telegram limit reached. Wait {e.seconds}s."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
@@ -54,13 +48,12 @@ async def send_code(req: PhoneRequest):
 async def verify(req: VerifyRequest):
     auth_data = await temp_auth.find_one({"user_id": req.user_id})
     if not auth_data:
-        return {"status": "error", "message": "No active session. Restart login."}
+        return {"status": "error", "message": "Session expired or User ID missing."}
 
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         try:
-            # Re-using the hash is critical for Vercel
             await client.sign_in(
                 phone=auth_data["phone"],
                 code=req.code,
@@ -77,10 +70,9 @@ async def verify(req: VerifyRequest):
             {"$set": {"session": string_session, "phone": auth_data["phone"]}},
             upsert=True
         )
-        await temp_auth.delete_one({"user_id": req.user_id})
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
         await client.disconnect()
-
+            
