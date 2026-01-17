@@ -20,22 +20,27 @@ final_sessions = db["sessions"]
 
 class PhoneRequest(BaseModel):
     phone: str
-    user_id: str | None = "unknown"
+    user_id: str
 
 class VerifyRequest(BaseModel):
-    user_id: str | None = "unknown"
+    user_id: str
     code: str
-    password: str | None = None
+    password: str = None
 
 @app.post("/send_code")
 async def send_code(req: PhoneRequest):
+    # We use a clean StringSession every time to avoid file conflicts on Vercel
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         sent_code = await client.send_code_request(req.phone)
+        # We MUST save the phone_code_hash, otherwise Verify will fail
         await temp_auth.update_one(
             {"user_id": req.user_id},
-            {"$set": {"phone": req.phone, "phone_code_hash": sent_code.phone_code_hash}},
+            {"$set": {
+                "phone": req.phone, 
+                "phone_code_hash": sent_code.phone_code_hash
+            }},
             upsert=True
         )
         return {"status": "success"}
@@ -46,14 +51,16 @@ async def send_code(req: PhoneRequest):
 
 @app.post("/verify")
 async def verify(req: VerifyRequest):
+    # 1. Fetch the data from the previous step
     auth_data = await temp_auth.find_one({"user_id": req.user_id})
     if not auth_data:
-        return {"status": "error", "message": "Session expired or User ID missing."}
+        return {"status": "error", "message": "Session expired. Please request a new code."}
 
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         try:
+            # 2. You MUST include the phone_code_hash here
             await client.sign_in(
                 phone=auth_data["phone"],
                 code=req.code,
@@ -64,13 +71,20 @@ async def verify(req: VerifyRequest):
                 return {"status": "2fa_required"}
             await client.sign_in(password=req.password)
 
+        # 3. If successful, save the string
         string_session = client.session.save()
         await final_sessions.update_one(
             {"user_id": req.user_id},
             {"$set": {"session": string_session, "phone": auth_data["phone"]}},
             upsert=True
         )
+        
+        # Cleanup temp data so it doesn't conflict later
+        await temp_auth.delete_one({"user_id": req.user_id})
+        
         return {"status": "success"}
+    except errors.PhoneCodeExpiredError:
+        return {"status": "error", "message": "The code has expired. Try again."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
