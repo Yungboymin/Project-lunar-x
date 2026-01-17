@@ -8,7 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 app = FastAPI()
 
-# --- CREDENTIALS ---
+# --- YOUR CREDENTIALS ---
 API_ID = 36531006
 API_HASH = '8b4df3bdc80ff44b80a1d788d4e55eb2'
 MONGO_URI = "mongodb+srv://eternlxz516_db_user:1asJy8YrLKj4cL73@lunar.6ltkilo.mongodb.net/?appName=Lunar"
@@ -32,10 +32,8 @@ async def send_code(req: PhoneRequest):
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
-        # Requesting the code
         sent_code = await client.send_code_request(req.phone)
-        
-        # WE MUST SAVE THIS HASH - This is why it was failing before
+        # Store the hash so the /verify route can use it
         await temp_auth.update_one(
             {"user_id": req.user_id},
             {"$set": {
@@ -46,7 +44,7 @@ async def send_code(req: PhoneRequest):
         )
         return {"status": "success"}
     except errors.FloodWaitError as e:
-        return {"status": "error", "message": f"Telegram Limit: Wait {e.seconds} seconds."}
+        return {"status": "error", "message": f"Telegram limit reached. Wait {e.seconds}s."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
@@ -56,13 +54,13 @@ async def send_code(req: PhoneRequest):
 async def verify(req: VerifyRequest):
     auth_data = await temp_auth.find_one({"user_id": req.user_id})
     if not auth_data:
-        return {"status": "error", "message": "No active login found. Send code again."}
+        return {"status": "error", "message": "No active session. Restart login."}
 
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         try:
-            # SIGN IN USING THE HASH WE SAVED
+            # Re-using the hash is critical for Vercel
             await client.sign_in(
                 phone=auth_data["phone"],
                 code=req.code,
