@@ -1,4 +1,6 @@
 fastapi
 telethon
 motor
+dnspython
 pydantic
+cryptography
