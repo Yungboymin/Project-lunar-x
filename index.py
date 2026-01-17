@@ -32,13 +32,21 @@ async def send_code(req: PhoneRequest):
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
+        # Request code from Telegram
         sent_code = await client.send_code_request(req.phone)
+        
+        # EXPLICIT STEP: Save the hash. Without this, /verify cannot work on Vercel.
         await temp_auth.update_one(
             {"user_id": req.user_id},
-            {"$set": {"phone": req.phone, "phone_code_hash": sent_code.phone_code_hash}},
+            {"$set": {
+                "phone": req.phone, 
+                "phone_code_hash": sent_code.phone_code_hash
+            }},
             upsert=True
         )
         return {"status": "success"}
+    except errors.FloodWaitError as e:
+        return {"status": "error", "message": f"Wait {e.seconds} seconds (Flood limit)."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
@@ -46,14 +54,16 @@ async def send_code(req: PhoneRequest):
 
 @app.post("/verify")
 async def verify(req: VerifyRequest):
+    # 1. Look up the temporary handshake data
     auth_data = await temp_auth.find_one({"user_id": req.user_id})
     if not auth_data:
-        return {"status": "error", "message": "Session expired or User ID missing."}
+        return {"status": "error", "message": "No active request found. Send the code again."}
 
     client = TelegramClient(StringSession(), API_ID, API_HASH)
     await client.connect()
     try:
         try:
+            # 2. EXPLICIT SIGN IN: Using the phone, code, and saved hash
             await client.sign_in(
                 phone=auth_data["phone"],
                 code=req.code,
@@ -64,15 +74,28 @@ async def verify(req: VerifyRequest):
                 return {"status": "2fa_required"}
             await client.sign_in(password=req.password)
 
+        # 3. GENERATE SESSION: If successful, save the permanent StringSession
         string_session = client.session.save()
         await final_sessions.update_one(
             {"user_id": req.user_id},
-            {"$set": {"session": string_session, "phone": auth_data["phone"]}},
+            {"$set": {
+                "session": string_session, 
+                "phone": auth_data["phone"],
+                "status": "active"
+            }},
             upsert=True
         )
+        
+        # 4. CLEANUP: Delete temp data so the user can re-log later if needed
+        await temp_auth.delete_one({"user_id": req.user_id})
+        
         return {"status": "success"}
+
+    except errors.PhoneCodeInvalidError:
+        return {"status": "error", "message": "Invalid code. Please check and try again."}
+    except errors.PhoneCodeExpiredError:
+        return {"status": "error", "message": "Code expired. Request a new one."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
         await client.disconnect()
-            
