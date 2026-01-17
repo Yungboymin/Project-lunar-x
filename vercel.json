@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "index.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "index.html",
+      "use": "@vercel/static"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/send_code",
+      "destination": "index.py"
+    },
+    {
+      "source": "/verify",
+      "destination": "index.py"
+    },
+    {
+      "source": "/",
+      "destination": "index.html"
+    }
+  ]
+}
